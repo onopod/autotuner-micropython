@@ -1,36 +1,48 @@
+import gc
+import uasyncio as asyncio
 import time
 from machine import ADC, Pin
 import ulab
 
-from util import Note
+from util import Note, Motor
 
 class Tone:
-    VOLUME_THRESHOLD = 3000;
+    VOLUME_THRESHOLD = 2000;
     
-    def __init__(self, pin=0, buffer_size=1024, Fs=2500):
+    def __init__(self, pin=0, buffer_size=512, Fs=2500):
         self.adc = ADC(pin)
         self.buffer_size = buffer_size
         self.Fs = Fs
-    
+        self.freq = 0
+        self.volume = 0
+        
     def get_sample_interval_us(self):
         return int(1_000_000 / self.Fs)
 
-    def fft(self):
+    async def fft(self):
         samparray = []
         start = time.ticks_us()
         for _ in range(self.buffer_size):
             samparray.append(self.adc.read())
             while time.ticks_diff(time.ticks_us(), start) < self.get_sample_interval_us() * (_ + 1):
-                pass
+                await asyncio.sleep_ms(0)
+
         end = time.ticks_us()
 
         self.real_Fs = self.buffer_size * 1_000_000 / time.ticks_diff(end, start)
 
         magnitudes = ulab.fft.spectrogram(ulab.array(samparray))
         idx = ulab.numerical.argmax(magnitudes[1:]) + 1
+        
         self.freq = idx * self.real_Fs / self.buffer_size
         self.volume = magnitudes[idx]
-       
+
+        del samparray
+        del magnitudes
+        gc.collect()
+
+
+
     def is_audible(self):
         return self.volume >= self.VOLUME_THRESHOLD
     
@@ -44,46 +56,33 @@ class Tone:
             ) if self.is_audible() else "."
           , end="")
 
-class Motor:
-    def __init__(self, sw_f, sw_r, mo_f, mo_r):
-        self.sw = {
-            "forward": Pin(sw_f, Pin.IN, Pin.PULL_UP),
-            "reverse": Pin(sw_r, Pin.IN, Pin.PULL_UP)
-        }
-        self.mo = {
-            "forward": Pin(mo_f, Pin.OUT),
-            "reverse": Pin(mo_r, Pin.OUT)
-        }
-    
-    def is_pushed(self, direction):
-        return self.sw[direction].value() == 0
-
-    def rotate(self, direction):
-        self.mo[direction].on()
-        time.sleep(0.2)
-        self.stop()
-
-    def stop(self):
-        self.mo["forward"].off()
-        self.mo["reverse"].off()
-
-if __name__ == "__main__":
-    t = Tone()
-    m = Motor(13, 2, 14, 12)
-
+async def fft_task(t):
     while True:
-        t.fft()
+        await t.fft()
+        await asyncio.sleep_ms(10)
+
+async def motor_task(m, t):
+    while True:
         n = Note(t.freq)
         if t.is_audible() and n.is_close():
             print("\nNote: {}({}), Freq: {}, Cent: {}, Volume: {}".format(n.name, n.value, t.freq, n.cent, t.volume), end="")
-            m.rotate("forward" if n.cent > 0 else "reverse")
+            await m.rotate("forward" if n.cent > 0 else "reverse", size=n.cent_per() * 0.3)
         else:
-            # print("\nxxxxxNote: {}({}), Freq: {}, Cent: {}, Volume: {}".format(n.name, n.value, t.freq, n.cent, t.volume), end="")
+            # print("\nxxxxNote: {}({}), Freq: {}, Cent: {}, Volume: {}".format(n.name, n.value, t.freq, n.cent, t.volume), end="")
             print(".", end="")
         
         if m.is_pushed("forward"):
-            m.rotate("forward")
+            await m.rotate("forward")
         elif m.is_pushed("reverse"):
-            m.rotate("reverse")
+            await m.rotate("reverse")
         else:
             m.stop()
+        
+        await asyncio.sleep_ms(50)
+            
+async def main():
+    t = Tone()
+    m = Motor(13, 2, 14, 12)
+    await asyncio.gather(fft_task(t), motor_task(m, t))
+
+asyncio.run(main())
