@@ -1,17 +1,27 @@
 import math
 
-def frequency_to_note(freq):
+class Note:
     A4 = 440.0
-    if freq <= 0:
-        return None, 0
+    TARGET_NOTES = [
+        ["E2", 82.407],
+        ["A2", 110],
+        ["D3", 146.832],
+        ["G3", 195.998],
+        ["B3", 246.942],
+        ["E4", 329.628],
+    ]
+    CENT_MIN_THRESHOLD = 12
+    CENT_MAX_THRESHOLD = 130
 
-    note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    
+    @classmethod
+    def get_cent_diff(cls, target, freq):
+        return 1200 * (math.log(freq / target) / math.log(2))
 
-    semitones = round(12 * math.log(freq / A4, 2))
-    nearest_freq = A4 * 2 ** (semitones / 12)
-    cents = 1200 * math.log(freq / nearest_freq, 2)
-
-    octave = 4 + (semitones + 9) // 12
-    note_index = (semitones + 9) % 12
-
-    return "{}{}".format(note_names[note_index], octave), round(cents)
+    def __init__(self, freq):
+        self.freq = freq
+        cents = [[name, value, Note.get_cent_diff(value, freq)] for name, value in Note.TARGET_NOTES]
+        self.name, self.value, self.cent =  sorted(cents, key=lambda e: abs(e[2]))[0]
+    
+    def is_close(self):
+        return self.CENT_MIN_THRESHOLD <= abs(self.cent) <= self.CENT_MAX_THRESHOLD

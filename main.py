@@ -2,10 +2,12 @@ import time
 from machine import ADC, Pin
 import ulab
 
-from util import frequency_to_note
+from util import Note
 
 class Tone:
-    def __init__(self, pin=0, buffer_size=1024, Fs=8000):
+    VOLUME_THRESHOLD = 3000;
+    
+    def __init__(self, pin=0, buffer_size=1024, Fs=2500):
         self.adc = ADC(pin)
         self.buffer_size = buffer_size
         self.Fs = Fs
@@ -21,33 +23,25 @@ class Tone:
             while time.ticks_diff(time.ticks_us(), start) < self.get_sample_interval_us() * (_ + 1):
                 pass
         end = time.ticks_us()
-        actual_sample_time_us = time.ticks_diff(end, start)
-        Fs = self.buffer_size * 1_000_000 / actual_sample_time_us  # 実測Fs
 
-        samparray = ulab.array(samparray)
-        magnitudes = ulab.fft.spectrogram(samparray)
+        self.real_Fs = self.buffer_size * 1_000_000 / time.ticks_diff(end, start)
+
+        magnitudes = ulab.fft.spectrogram(ulab.array(samparray))
         idx = ulab.numerical.argmax(magnitudes[1:]) + 1
-        freq = idx * Fs / self.buffer_size
-        
-        note, cents = frequency_to_note(freq)
-        sign = "+" if cents >= 0 else ""
-
-        self.values = {
-            "freq": freq,
-            "power": magnitudes[idx],
-            "note": note,
-            "sign": sign,
-            "cents": cents
-        }
-        
+        self.freq = idx * self.real_Fs / self.buffer_size
+        self.volume = magnitudes[idx]
+       
+    def is_audible(self):
+        return self.volume >= self.VOLUME_THRESHOLD
+    
     def print_status(self):
-        print("\nFrequency: {:.2f} Hz power {} [{}] {}{} cent".format(
-                self.values["freq"],
-                self.values["power"],
-                self.values["note"],
-                self.values["sign"],
-                self.values["cents"]
-            ) if self.values["power"] >= 4000 else "."
+        note, _, cent = Note.note(self.freq)
+        print("{:.2f} Hz vol {} [{}] {} cent".format(
+                self.freq,
+                self.volume,
+                note,
+                cent
+            ) if self.is_audible() else "."
           , end="")
 
 class Motor:
@@ -62,11 +56,12 @@ class Motor:
         }
     
     def is_pushed(self, direction):
-        print(self.sw[direction].value())
         return self.sw[direction].value() == 0
 
     def rotate(self, direction):
         self.mo[direction].on()
+        time.sleep(0.2)
+        self.stop()
 
     def stop(self):
         self.mo["forward"].off()
@@ -76,16 +71,15 @@ if __name__ == "__main__":
     t = Tone()
     m = Motor(13, 2, 14, 12)
 
-    m.rotate("forward")
-    time.sleep(0.5)
-    m.stop()    
-    m.rotate("reverse")
-    time.sleep(0.5)
-    m.stop()    
-
     while True:
         t.fft()
-        t.print_status()
+        n = Note(t.freq)
+        if t.is_audible() and n.is_close():
+            print("\nNote: {}({}), Freq: {}, Cent: {}, Volume: {}".format(n.name, n.value, t.freq, n.cent, t.volume), end="")
+            m.rotate("forward" if n.cent > 0 else "reverse")
+        else:
+            # print("\nxxxxxNote: {}({}), Freq: {}, Cent: {}, Volume: {}".format(n.name, n.value, t.freq, n.cent, t.volume), end="")
+            print(".", end="")
         
         if m.is_pushed("forward"):
             m.rotate("forward")
